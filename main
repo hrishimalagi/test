@@ -1,0 +1,308 @@
+import cv2
+import numpy as np
+import os
+import csv
+import datetime as dt
+from tkinter import Tk, Label, Button, Entry, OptionMenu, messagebox, StringVar
+from PIL import Image, ImageTk
+from PIL import ImageFont, ImageDraw
+from tkinter import LabelFrame
+
+# Set the paths for Haar cascade, dataset directory, names CSV file, and attendance log file
+cascadePath = "haarcascade_frontalface_default.xml"
+datasetPath = "Dataset"
+namesFilePath = "names.csv"
+attendanceFilePath = "data_log.csv"
+usersFilePath = "users.csv"
+
+# Load the Haar cascade classifier
+faceCascade = cv2.CascadeClassifier(cascadePath)
+
+# Create LBPH face recognizer
+recognizer = cv2.face.LBPHFaceRecognizer_create()
+
+# Load usernames and passwords from CSV file
+users = {}
+if os.path.exists(usersFilePath):
+    with open(usersFilePath, 'r') as csvfile:
+        reader = csv.reader(csvfile)
+        for row in reader:
+            try:
+                username, password = row
+                users[username] = password
+            except ValueError:
+                continue
+
+# Function to save usernames and passwords to CSV file
+def save_users():
+    with open(usersFilePath, 'w') as csvfile:
+        writer = csv.writer(csvfile)
+        for username, password in users.items():
+            writer.writerow([username, password])
+
+# Function to add a new user
+def add_user():
+    new_username = new_username_entry.get()
+    new_password = new_password_entry.get()
+
+    if new_username and new_password:
+        users[new_username] = new_password
+        save_users()
+        messagebox.showinfo("User Added", "New user has been added successfully.")
+    else:
+        messagebox.showwarning("Missing Information", "Please enter both username and password.")
+
+
+# Function to authenticate a user
+def authenticate_user():
+    entered_username = username_entry.get()
+    entered_password = password_entry.get()
+
+    print("Entered username:", entered_username)
+    print("Entered password:", entered_password)
+    print("Stored users:", users)
+
+    stored_password = users.get(entered_username, "")
+    
+    if entered_password.strip() == stored_password.strip():
+        messagebox.showinfo("Authentication Successful", "Authentication successful. You can now proceed.")
+    else:
+        messagebox.showerror("Authentication Failed", "Authentication failed. Please check your credentials.")
+
+# Function to register a student
+def register_student():
+    # Prompt the user to enter an ID and name for the student
+    student_id = str(input_id.get())
+    student_name = str(input_name.get())
+
+    if student_id and student_name:
+        # Create a directory for the student in the dataset directory
+        student_dir = os.path.join(datasetPath, student_id)
+        if not os.path.exists(student_dir):
+            os.makedirs(student_dir)
+
+        # Initialize the webcam
+        cam = cv2.VideoCapture(0)
+        detector = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
+
+        sampleNum = 0
+        while True:
+            ret, img = cam.read()  # Read from webcam
+            cv2.imshow('frame', img)  # Display the frame
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)  # Convert to grayscale
+            faces = detector.detectMultiScale(gray, 1.3, 5)  # Detect faces
+
+            for (x, y, w, h) in faces:
+                cv2.rectangle(img, (x, y), (x + w, y + h), (255, 0, 0), 2)  # Draw bounding box
+                # Save the face region as an image file in the student's directory
+                cv2.imwrite(f'{student_dir}/{student_id}_{sampleNum}.jpg', gray[y:y + h, x:x + w])
+                sampleNum += 1
+
+            cv2.imshow('frame', img)
+            if cv2.waitKey(500) & 0x05FF == ord('q'):
+                break
+            elif sampleNum > 30:  # Break if the desired number of samples is reached
+                break
+
+        cam.release()
+        cv2.destroyAllWindows()
+
+        # Append the student's ID and name to the names CSV file
+        with open(namesFilePath, 'a') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow([student_id, student_name])
+
+        messagebox.showinfo("Success", "Student registration completed.")
+    else:
+        messagebox.showwarning("Missing Information", "Please enter both ID and Name.")
+
+# Function to take attendance
+def take_attendance():
+    # Load names from the CSV file
+    names = {}
+    with open(namesFilePath, 'r') as csvfile:
+        reader = csv.reader(csvfile)
+        for row in reader:
+            try:
+                label, name = row
+                names[int(label)] = name
+            except ValueError:
+                continue
+
+    # Create LBPH face recognizer
+    recognizer = cv2.face.LBPHFaceRecognizer_create()
+
+    # Initialize the dataset for face recognition
+    faces = []
+    labels = []
+    for student_id in names.keys():
+        student_dir = os.path.join(datasetPath, str(student_id))
+        for image_file in os.listdir(student_dir):
+            image_path = os.path.join(student_dir, image_file)
+            face_image = Image.open(image_path).convert("L")
+            face_np = np.array(face_image, "uint8")
+            faces.append(face_np)
+            labels.append(student_id)
+
+    # Train the recognizer with the dataset
+    recognizer.train(faces, np.array(labels))
+
+    # Get the selected subject from the option menu
+    selected_subject = subject_var.get()
+
+    # Get the entered password
+    password = password_entry.get()
+
+    # Perform password validation
+    if password == password_var.get():
+
+        # Initialize the webcam
+        cap = cv2.VideoCapture(0)
+
+        # Initialize a set to track the logged faces
+        logged_faces = set()
+
+        while True:
+            ret, frame = cap.read()
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = faceCascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5)
+
+            for (x, y, w, h) in faces:
+                cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+
+                # Convert face region to grayscale
+                face_gray = gray[y:y + h, x:x + w]
+
+                # Recognize the face
+                id, confidence = recognizer.predict(face_gray)
+
+                # Check if confidence is within a threshold (e.g., 70)
+                if confidence < 70:
+                    student_id = str(id)
+                    student_name = names.get(id, "Unknown")
+
+                    # Check if the face has already been logged
+                    if student_id not in logged_faces:
+                        # Update the attendance log only if the face belongs to a registered student
+                        if student_name != "Unknown":
+                            # Append the student's ID and name to the attendance log
+                            with open(attendanceFilePath, 'a') as csvfile:
+                                writer = csv.writer(csvfile)
+                                writer.writerow([str(dt.datetime.now().strftime("%d-%m-%Y")),
+                                                 str(dt.datetime.now().strftime("%H:%M:%S")),
+                                                 student_id, student_name, selected_subject])
+                            # Display an on-screen indication for marking attendance
+                            attendance_text = f"Attendance marked for {student_name}"
+                            cv2.putText(frame, attendance_text, (x, y + h + 20),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+                            cv2.waitKey(2000)  # Wait for 2000 milliseconds (2 seconds)
+
+                            # Add the face to the set of logged faces
+                            logged_faces.add(student_id)
+
+            cv2.imshow('frame', frame)
+            k = cv2.waitKey(10) & 0x7F
+            if k == 27:  # ESC key to exit
+                break
+
+        cap.release()
+        cv2.destroyAllWindows()
+
+        # Display a message box with the attendance details
+        messagebox.showinfo("Attendance", f"Attendance for {selected_subject} has been taken.")
+    else:
+        messagebox.showerror("Incorrect Password", "Incorrect password. Please try again.")
+
+# Function to create a new password
+def create_password():
+    new_password = new_password_entry.get()
+
+    if new_password:
+        password_var.set(new_password)
+        messagebox.showinfo("Password Created", "New password has been set successfully.")
+    else:
+        messagebox.showwarning("Missing Information", "Please enter a new password.")
+
+window = Tk()
+window.title("Attendance System")
+window.geometry("800x400")
+password_var = StringVar()
+
+
+image = Image.open("background_image.png")
+window_width, window_height = 800, 400
+image = image.resize((window_width, window_height), Image.ANTIALIAS)
+photo = ImageTk.PhotoImage(image)
+background_label = Label(window, image=photo)
+background_label.place(x=0, y=0, relwidth=1, relheight=1)
+# Create authentication frame
+auth_frame = LabelFrame(window, text="Authenticate User", padx=10, pady=10, bg="white")
+auth_frame.grid(row=0, column=0, padx=10, pady=10, sticky="n")
+
+# Create widgets within auth_frame
+username_label = Label(auth_frame, text="Username:", font=("Arial", 14), bg="white")
+username_label.pack()
+username_entry = Entry(auth_frame, font=("Arial", 14))
+username_entry.pack(pady=5)
+
+password_label = Label(auth_frame, text="Password:", font=("Arial", 14), bg="white")
+password_label.pack()
+# Use the password_var as the textvariable for the password entry field
+password_entry = Entry(auth_frame, show="*", font=("Arial", 14), textvariable=password_var)
+password_entry.pack(pady=5)
+
+auth_button = Button(auth_frame, text="Authenticate", font=("Arial", 14), command=authenticate_user)
+auth_button.pack(pady=10)
+
+#register
+register_frame = LabelFrame(window, text="Register Student", padx=10, pady=10, bg="white")
+register_frame.grid(row=0, column=1, padx=10, pady=10, sticky="n")
+
+id_label = Label(register_frame, text="Student ID:", font=("Arial", 14), bg="white")
+id_label.pack()
+input_id = Entry(register_frame, font=("Arial", 14))
+input_id.pack(pady=5)
+
+name_label = Label(register_frame, text="Student Name:", font=("Arial", 14), bg="white")
+name_label.pack()
+input_name = Entry(register_frame, font=("Arial", 14))
+input_name.pack(pady=5)
+
+register_button = Button(register_frame, text="Register", font=("Arial", 14), command=register_student)
+register_button.pack(pady=10)
+
+attendance_frame = LabelFrame(window, text="Take Attendance", padx=10, pady=10, bg="white")
+attendance_frame.grid(row=1, column=0, padx=10, pady=10, sticky="n")
+
+subject_label = Label(attendance_frame, text="Subject:", font=("Arial", 14), bg="white")
+subject_label.pack()
+subject_var = StringVar(attendance_frame)
+subject_var.set("Math")
+subject_menu = OptionMenu(attendance_frame, subject_var, "Math", "Science", "English", "History")
+subject_menu.pack(pady=5)
+
+password_label = Label(attendance_frame, text="Password:", font=("Arial", 14), bg="white")
+password_label.pack()
+password_entry = Entry(attendance_frame, show="*", font=("Arial", 14))
+password_entry.pack(pady=5)
+
+attendance_button = Button(attendance_frame, text="Take Attendance", font=("Arial", 14), command=take_attendance)
+attendance_button.pack(pady=10)
+
+new_user_frame = LabelFrame(window, text="Add New User", padx=10, pady=10, bg="white")
+new_user_frame.grid(row=1, column=1, padx=10, pady=10, sticky="w")
+
+new_username_label = Label(new_user_frame, text="New Username:", font=("Arial", 14), bg="white")
+new_username_label.pack()
+new_username_entry = Entry(new_user_frame, font=("Arial", 14))
+new_username_entry.pack(pady=5)
+
+new_password_label = Label(new_user_frame, text="New Password:", font=("Arial", 14), bg="white")
+new_password_label.pack()
+new_password_entry = Entry(new_user_frame, show="*", font=("Arial", 14))
+new_password_entry.pack(pady=5)
+
+add_user_button = Button(new_user_frame, text="Add User", font=("Arial", 14), command=add_user)
+add_user_button.pack(pady=10)
+
+window.mainloop()
